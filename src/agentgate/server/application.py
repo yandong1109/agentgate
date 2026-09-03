@@ -48,6 +48,9 @@ def get_datasets_service() -> Any:
 
 from agentgate.task.repository import TaskRepository
 from agentgate.task.service import SchedulerService
+from agentgate.target import api as target_api
+from agentgate.target.repository import Base as TargetBase, TargetRepository
+from agentgate.target.service import TargetService
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -290,7 +293,29 @@ def create_app(database_path: str | Path | None = None) -> FastAPI:
     db_path = database_path or os.getenv("AGENTGATE_DB", "agentgate.db")
     logger.info(f"使用数据库: {db_path}")
     repository = SQLiteRepository(db_path)
-    service = EvaluationService(repository)
+
+    # 评测对象模块（target）：SQLAlchemy 纯增量建表，回退代码可直接忽略新表
+    target_engine = create_engine(
+        f"sqlite:///{db_path}", connect_args={"check_same_thread": False}
+    )
+    TargetBase.metadata.create_all(target_engine)
+    TargetSessionFactory = sessionmaker(bind=target_engine)
+    target_repository = TargetRepository(TargetSessionFactory)
+    target_service = TargetService(
+        target_repository,
+        has_run_references=lambda external_id: any(
+            run.snapshot.target.ref.external_target_id == external_id
+            for run in repository.list_runs()
+        ),
+    )
+    target_api.set_services(target_service)
+
+    def _registration_provider():
+        return target_service.build_registrations()
+
+    service = EvaluationService(
+        repository, registration_provider=_registration_provider
+    )
     datasets = service.dataset_service
     global _datasets_service
     _datasets_service = datasets
@@ -315,6 +340,7 @@ def create_app(database_path: str | Path | None = None) -> FastAPI:
         yield
         # 关闭时：停止调度器
         scheduler_service.stop_scheduler()
+        target_engine.dispose()
 
     app = FastAPI(title="AgentGate", version="0.1.0", lifespan=lifespan)
     app.add_middleware(
@@ -685,9 +711,11 @@ def create_app(database_path: str | Path | None = None) -> FastAPI:
         return report
 
     api.include_router(task_api.router)
+    api.include_router(target_api.router)
     app.include_router(api)
     app.state.repository = repository
     app.state.service = service
+    app.state.target_service = target_service
     return app
 
 

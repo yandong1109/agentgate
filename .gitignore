@@ -16,3 +16,4 @@ web/dist/
 logs/*
 *.log
 trace-*.json
+agentgate.db.bak.*

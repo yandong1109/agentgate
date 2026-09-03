@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import logging
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import uuid4
+
+LOGGER = logging.getLogger(__name__)
 
 from agentgate.case import DatasetService
 from agentgate.demo.loan import LOAN_DATASET, LOAN_DATASET_VERSION, LoanAgent
@@ -116,12 +120,35 @@ def _build_registry() -> dict[str, TargetRegistration]:
 class EvaluationService:
     """Coordinate evaluation launches and read models for the local POC."""
 
-    def __init__(self, repository: AgentGateRepository) -> None:
+    def __init__(
+        self,
+        repository: AgentGateRepository,
+        registration_provider: Callable[[], Sequence[TargetRegistration]] | None = None,
+    ) -> None:
         self.repository = repository
         self.engine = RunEngine(repository)
         self.dataset_service = DatasetService(repository)
         self.dataset_service.seed(LOAN_DATASET, LOAN_DATASET_VERSION)
-        self._registry = _build_registry()
+        self._registration_provider = registration_provider
+
+    @property
+    def _registry(self) -> dict[str, TargetRegistration]:
+        """注册表：demo 硬编码注册 + DB 注册（同 id 时 DB 优先）。
+
+        provider 失败时仅记录告警并回落到 demo 注册，保证启动/回退安全。
+        """
+        registry = _build_registry()
+        provider = self._registration_provider
+        if provider is not None:
+            try:
+                for registration in provider():
+                    registry[registration.target_id] = registration
+            except Exception as exc:  # noqa: BLE001 - 注册表不可用时保底
+                LOGGER.warning(
+                    "target registration provider failed, "
+                    "falling back to demo registry only: %s", exc,
+                )
+        return registry
 
     def _find_registration_by_version(self, version: str) -> TargetRegistration | None:
         for reg in self._registry.values():
