@@ -498,6 +498,11 @@ onMounted(async () => {
       evaluatorsApi.evaluators(),
     ])
     targetVersions.value = agents
+    // 当前默认选择失效时回落到 is_latest 项（不再依赖硬编码 demo id）
+    if (!agents.some((item) => item.id === selectedAgent.value)) {
+      selectedAgent.value =
+        agents.find((item) => item.is_latest)?.id ?? agents[0]?.id ?? ''
+    }
     evaluators.value = evaluatorItems
     selectedEvaluators.value = evaluatorItems.map((item) => item.id)
     await loadDatasets()

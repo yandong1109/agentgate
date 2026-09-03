@@ -12,6 +12,7 @@ import { targetsApi } from '@/api/targets'
 import { datasetsApi } from '@/api/datasets'
 import { evaluatorsApi } from '@/api/evaluators'
 import { runsApi } from '@/api/runs'
+import { useRunStore } from '@/stores/modules/run'
 import type { Overview } from '@/types/dashboard'
 import type { Version } from '@/types/target'
 import type { DatasetSummary } from '@/types/dataset'
@@ -19,6 +20,7 @@ import type { EvaluatorOption } from '@/types/evaluator'
 import type { Run } from '@/types/target'
 
 export const useDashboardStore = defineStore('dashboard', () => {
+  const runStore = useRunStore()
   const overview = shallowRef<Overview>({
     total_runs: 0,
     completed_runs: 0,
@@ -43,6 +45,7 @@ export const useDashboardStore = defineStore('dashboard', () => {
       ])
       overview.value = overviewData
       versions.value = versionsData
+      runStore.ensureVersionExists(versionsData)
       datasets.value = datasetsData
       evaluators.value = evaluatorsData
       runs.value = runsData

@@ -445,25 +445,21 @@ def _get_case_turns(case: Any) -> list:
 
 
 def _get_target_info(target_id: str) -> dict:
-    """从版本注册表获取评测对象信息"""
+    """从评测对象服务获取评测对象信息（S3：切换到 target 模块数据源）。
+
+    数据源说明：优先经 target 服务解析（支持版本键，如 "my-agent-v1"）；
+    解析失败时返回与旧行为一致的回退结构，仅记录告警不再静默吞错。
+    """
     try:
-        from src.agentgate.server.application import get_datasets_service
-        datasets_service = get_datasets_service()
-        if datasets_service:
-            versions = datasets_service.versions()
-            for v in versions:
-                if v.get("id") == target_id:
-                    return {
-                        "agent_name": v.get("label", ""),
-                        "agent_type": v.get("adapter_type", "REMOTE_AGENT"),
-                        "config": {"endpoint": v.get("endpoint"), "credential_ref": v.get("credential_ref")},
-                        "status": "ACTIVE",
-                    }
+        from agentgate.target import api as target_api
+
+        service = target_api.get_target_service()
+        return service.get_target_info(target_id)
     except Exception as e:
-        logger.error(f"获取评测对象信息失败: {e}")
-    return {
-        "agent_name": target_id,
-        "agent_type": "REMOTE_AGENT",
-        "config": {},
-        "status": "ACTIVE",
-    }
+        logger.warning(f"获取评测对象信息失败，使用回退配置: {e}")
+        return {
+            "agent_name": target_id,
+            "agent_type": "REMOTE_AGENT",
+            "config": {},
+            "status": "ACTIVE",
+        }

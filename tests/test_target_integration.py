@@ -232,3 +232,26 @@ def test_get_target_info_shape_for_task_module(client, credential_env):
             "config": {},
             "status": "ACTIVE",
         }
+
+
+def test_task_module_get_target_info_bridge(client, credential_env):
+    """S3：task/api.py::_get_target_info 切换到 target 服务数据源。"""
+    with FakeHttpAgent(behavior="success") as agent:
+        _register(client, agent.endpoint, credential_ref=credential_env)
+
+        from agentgate.task.api import _get_target_info
+
+        info = _get_target_info("fake-agent-v1")
+        assert info["agent_name"] == "Fake Agent"
+        assert info["agent_type"] == "REMOTE_AGENT"
+        assert info["config"]["endpoint"] == agent.endpoint
+        assert info["config"]["credential_ref"] == credential_env
+
+        # 未知 id（如 demo 注册）：与旧行为一致的回退结构
+        fallback = _get_target_info("loan-agent-v2-fixed")
+        assert fallback == {
+            "agent_name": "loan-agent-v2-fixed",
+            "agent_type": "REMOTE_AGENT",
+            "config": {},
+            "status": "ACTIVE",
+        }
