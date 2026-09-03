@@ -3,6 +3,9 @@
 ## Current Authority
 
 - [Product requirements](product-requirements-zh.md) define the intended product behavior.
+- [Requirements baseline](requirements-baseline-zh.md) is the detailed, authoritative
+  statement of requirements (numbering, priorities, acceptance criteria), supplementing the
+  product requirements overview; where the two differ, the baseline prevails.
 - [Architecture review ledger](architecture-review-ledger.md) is the authoritative
   `refactor-1` structure while Level 2 and Level 3 review is in progress.
 - Running code and automated tests describe the inherited `goal/p1-demo` baseline; they
