@@ -11,6 +11,74 @@ export interface Version {
   credential_ref?: string | null
 }
 
+export interface Capability {
+  name: string
+  kind: string
+  description: string
+}
+
+export interface TargetVersionInfo {
+  id: string
+  target_id: string
+  version: number
+  endpoint: string
+  credential_ref: string | null
+  invocation_config: { timeout_seconds?: number } & Record<string, unknown>
+  capabilities: Capability[]
+  content_sha256: string
+  is_latest: boolean
+  published_at: string
+}
+
+export interface TargetRecord {
+  id: string
+  display_name: string
+  target_type: 'agent' | 'skill'
+  adapter_type: string
+  external_target_id: string
+  platform_id: string
+  description: string
+  capabilities: Capability[]
+  status: string
+  created_at: string
+  updated_at: string
+}
+
+export interface TargetListItem extends TargetRecord {
+  version_count: number
+  latest_version: TargetVersionInfo | null
+}
+
+export interface TargetDetail extends TargetRecord {
+  versions: TargetVersionInfo[]
+}
+
+export interface ConnectionProbe {
+  ok: boolean
+  error_code?: string
+  message?: string
+  latency_ms?: number
+  trace_id?: string | null
+}
+
+export interface RegisterTargetPayload {
+  display_name: string
+  endpoint: string
+  target_type: 'agent' | 'skill'
+  adapter_type: 'http'
+  credential_ref?: string | null
+  description?: string
+  capabilities?: Capability[]
+  timeout_seconds?: number
+}
+
+export interface PublishTargetVersionPayload {
+  endpoint?: string
+  credential_ref?: string | null
+  capabilities?: Capability[]
+  timeout_seconds?: number
+}
+
 export interface Run {
   id: string
   status: string
