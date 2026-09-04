@@ -53,7 +53,11 @@ def export_trace(
             {
                 "traceId": trace_id,
                 "spanId": uuid4().hex[:16],
-                "name": "tool.call",
+                # 契约要点：OTLP span 的 name 必须就是工具名本身
+                # （评估器按 span.name == required_tools 匹配，见
+                #   evaluator/rules/tool_use.py + trace/merge.py；
+                #   tool.name 属性仅用于 TOOL kind 识别）
+                "name": event["tool"],
                 "attributes": [
                     _attr("openinference.span.kind", "TOOL"),
                     _attr("tool.name", event["tool"]),
