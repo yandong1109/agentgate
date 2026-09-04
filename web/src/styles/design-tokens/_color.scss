@@ -1,0 +1,34 @@
+// Design Token · 色彩（对齐 redesign-plan-zh.md §5.1）
+// 纯成员定义（无 CSS 输出），供全局注入与 :root 映射复用
+// 主色：Emerald Green #07ac8e
+$color-primary: #07ac8e !default;
+$color-primary-hover: #02b38a !default;
+$color-primary-active: #00957a !default;
+$color-primary-lighter: #d5f1ec !default;
+
+// 语义色
+$color-success: #02b38a !default;
+$color-warning: #fba455 !default;
+$color-error: #ef4444 !default;
+$color-info: #3b82f6 !default;
+
+// 中性色 8 阶
+$gray-50: #f9fafb !default;
+$gray-100: #f3f4f6 !default;
+$gray-200: #e5e7eb !default;
+$gray-300: #d1d5db !default;
+$gray-400: #9ca3af !default;
+$gray-500: #6b7280 !default;
+$gray-600: #4b5563 !default;
+$gray-700: #374151 !default;
+$gray-800: #1f2937 !default;
+$gray-900: #111827 !default;
+
+// 文本与背景
+$text-primary: $gray-900 !default;
+$text-regular: $gray-700 !default;
+$text-secondary: $gray-500 !default;
+$text-placeholder: $gray-400 !default;
+$bg-page: $gray-50 !default;
+$bg-card: #ffffff !default;
+$border-color: $gray-200 !default;

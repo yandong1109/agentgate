@@ -37,11 +37,11 @@ src/agentgate/
   queue/         # Public reservation and queue orchestration
   optimizer/     # Badcase analysis and human-reviewed recommendations
   lineage/       # Asset versions and dependency lineage
-  control/       # Shared operations used by CLI/API/Web
+  control_plane/ # Local control-plane service used by CLI/API/Web
   cli/           # Command-line entry point
   server/        # REST API entry point
 
-web/             # Future Vue/TypeScript UI
+web/             # Vue/TypeScript evaluation UI
 docs/            # Design docs
 examples/        # Demo agents and datasets
 tests/           # Test suite
@@ -49,8 +49,8 @@ tests/           # Test suite
 
 The five core evaluation objects remain `Case -> Run + Trace -> Evaluator -> Result`.
 Experiment, queue, optimizer, and lineage are product modules composed around that core;
-they do not replace it. See `docs/capability-mapping.md` for capability ownership and
-implementation status.
+they do not replace it. See the [documentation index](docs/README.md) and individual
+module design records for verified capability ownership and progress.
 
 ## First Demo Target
 
@@ -61,6 +61,14 @@ The first demo should be a loan approval agent:
 - Approval may require human review.
 - Evaluators check tool calls, tool arguments, workflow policy, and final state.
 
-## Status
+## P1 Demo
 
-Early scaffold. Core models and contracts should be finalized before building the Web UI or distributed runtime.
+The repository contains a working SQLite-backed loan-approval evaluation slice with a
+deterministic target, HTTP External Target support, CLI, REST/OTLP HTTP endpoints, and a
+Chinese Vue UI. Current status is maintained in the relevant Trace, Run, Dataset, and
+Evaluator documents. The original P1 walkthrough is retained under
+[history](docs/history/p1-demo/demo-test-guide.md).
+
+Published Dataset versions can be exported as JSON or Excel. Excel imports create a new
+Dataset Draft and support single-turn and multi-turn Cases. See the
+[Dataset documentation](docs/dataset/README.md) for the workbook contract and limits.

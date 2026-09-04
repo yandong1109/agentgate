@@ -1,0 +1,25 @@
+// Design Token · 断点
+$breakpoint-sm: 640px !default;
+$breakpoint-md: 768px !default;
+$breakpoint-lg: 1024px !default;
+$breakpoint-xl: 1280px !default;
+
+@mixin respond-to($bp) {
+  @if $bp == sm {
+    @media (max-width: $breakpoint-sm) {
+      @content;
+    }
+  } @else if $bp == md {
+    @media (max-width: $breakpoint-md) {
+      @content;
+    }
+  } @else if $bp == lg {
+    @media (max-width: $breakpoint-lg) {
+      @content;
+    }
+  } @else if $bp == xl {
+    @media (max-width: $breakpoint-xl) {
+      @content;
+    }
+  }
+}

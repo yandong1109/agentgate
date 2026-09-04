@@ -1,0 +1,38 @@
+// Element Plus 主题覆盖
+// 按 redesign-plan-zh.md §5.3：主色 #07ac8e，圆角 8px
+// 采用 CSS 变量覆盖（EP 官方推荐的现代主题方案，与 dark/css-vars.css 一致）
+// 如需 SCSS @forward 编译整包主题，可改用下方注释的方案
+/*
+@forward 'element-plus/theme-chalk/src/common/var.scss' with (
+  $colors: ('primary': ('base': #07ac8e)),
+  $border-radius: ('base': 8px)
+);
+@use 'element-plus/theme-chalk/src/index.scss' as *;
+*/
+@use 'design-tokens/index.scss' as *;
+
+:root {
+  // 主色 Emerald Green
+  --el-color-primary: #{$color-primary};
+  --el-color-primary-light-3: #43c4a8;
+  --el-color-primary-light-5: #7bd8c5;
+  --el-color-primary-light-7: #b4e9df;
+  --el-color-primary-light-8: #cef0e8;
+  --el-color-primary-light-9: #{$color-primary-lighter};
+  --el-color-primary-dark-2: #{$color-primary-active};
+
+  // 语义色
+  --el-color-success: #{$color-success};
+  --el-color-warning: #{$color-warning};
+  --el-color-error: #{$color-error};
+  --el-color-info: #{$color-info};
+
+  // 圆角
+  --el-border-radius-base: #{$radius};
+  --el-border-radius-small: #{$radius-small};
+  --el-border-radius-round: #{$radius-full};
+
+  // 字体
+  --el-font-size-base: #{$font-size-body};
+  --el-font-family: #{$font-family};
+}

@@ -8,5 +8,13 @@ build/
 *.egg-info/
 .env
 .DS_Store
+*.db
+web/test-results/
+web/playwright-report/
 node_modules/
 web/dist/
+logs/*
+*.log
+trace-*.json
+agentgate.db.bak.*
+.idea/

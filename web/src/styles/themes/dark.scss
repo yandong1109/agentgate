@@ -1,0 +1,25 @@
+// 暗黑模式（redesign-plan-zh.md §5.4）
+// 通过 :root[data-theme="dark"] 覆盖 Design Token
+// Element Plus 暗黑模式由 main.ts 引入 dark/css-vars.css
+@use 'design-tokens/index.scss' as *;
+
+:root[data-theme='dark'] {
+  --bg-page: #{$gray-900};
+  --bg-card: #{$gray-800};
+  --text-primary: #{$gray-50};
+  --text-regular: #{$gray-100};
+  --text-secondary: #{$gray-400};
+  --text-placeholder: #{$gray-500};
+  --border-color: #{$gray-700};
+
+  --el-bg-color: #{$gray-800};
+  --el-bg-color-page: #{$gray-900};
+  --el-bg-color-overlay: #{$gray-800};
+  --el-text-color-primary: #{$gray-50};
+  --el-text-color-regular: #{$gray-100};
+  --el-text-color-secondary: #{$gray-400};
+  --el-border-color: #{$gray-700};
+  --el-border-color-light: #{$gray-600};
+  --el-fill-color: #{$gray-700};
+  --el-fill-color-light: #{$gray-800};
+}
