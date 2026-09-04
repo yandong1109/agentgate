@@ -386,7 +386,7 @@ async def list_run_cases(run_id: str) -> dict[str, Any]:
 def _get_dataset_version(dataset_id: str) -> dict:
     """从数据集服务获取完整的数据集版本信息"""
     try:
-        from src.agentgate.server.application import get_datasets_service
+        from agentgate.server.application import get_datasets_service
         datasets_service = get_datasets_service()
         if datasets_service:
             version = datasets_service.get_version(dataset_id, 1)

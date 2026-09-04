@@ -106,3 +106,31 @@ AGENTGATE_TRACE_SDK_FILE_ROOT=/path/to/sdk-out
 4. G0 外部前置项跟踪：trace-sdk 仓库 `trace_consumer/fields.py` 缺失、
    PG schema 未落 metadata/tags（file 模式不受影响）；
 5. OTLP 接收器 G3 收口（当前标记保留，随时可回退）。
+
+---
+
+## 八、追加交付：任务管理接真链路（2026-09-04）
+
+**需求**：评测入口从「发起评测·运行评估」扩展到「任务管理·创建任务·启动」，
+最小改动复用原接口与数据。
+
+**改动（后端 ~100 行，前端 0 行，数据模型 0 变更）**：
+
+| 文件 | 改动 |
+|---|---|
+| `server/application.py` | 新增 `get_evaluation_service()` 全局访问器 |
+| `task/api.py`、`task/scheduler.py` | 修复三处 `from src.agentgate...` 坏导入（src 布局下必失败且被吞——此前取数据集恒空、执行全为伪造数据） |
+| `task/scheduler.py` `_execute_task` | **删除**硬编码 demo（苏州市调研样例）与伪造结果（85.0/模拟响应）；**替换为** `asyncio.to_thread(EvaluationService.launch(target_id, dataset_id, None, [evaluator_id]))` 真链路——与「运行评估」同一入口；从 `engine.report` 映射 TaskRun 统计（completed/passed/failed/avg_score 0-100）与逐用例 CaseExecution（真实评分与评估器结果摘要）；Run 未完成/异常 → 任务 FAIL 留痕 |
+| `tests/task/test_real_execution.py`（新增） | 3 个集成测试：真链路成功（demo 目标）/ 死端点失败 / 未知评估器失败 |
+
+**复用要点**：任务表 `target_id` 存的正是 `versions()` 的版本键（launch 的
+version 参数）、`dataset_id` 传 None 自动取最新 published 版本——数据天然对齐，
+零 schema 变更；真实 Run 自动出现在运行记录/结果报告页。
+
+**验收**：后端 376 passed（旧测试零修改）；E2E 15；实测「创建→启动→调度执行
+（10 秒扫描）」走 trace-sdk 通道（Ticket-Approv-Agent + 工单数据集）：任务
+SUCCESS、2/2 用例通过、avg 100.0（真实报告值，非伪造 85.0）、CaseExecution
+摘要为真实评估结果。
+
+**已知限制**：launch 阻塞式执行，长数据集任务占用调度器单循环（POC 可接受）；
+任务详情页跳转结果报告按钮为 P2 增强（需 TaskRun 加 external_run_id 列）。

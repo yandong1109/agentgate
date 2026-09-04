@@ -1,12 +1,13 @@
-# 任务模块代码文档 (V4)
+# 任务模块代码文档 (V5)
 
 ## 1. 模块概述
 
-任务模块是 AgentGate 评测系统的核心调度引擎，负责：
-- 管理评测任务的编排和执行
-- 调度 TargetAgent 执行测评集用例
-- 调用评估器计算评测结果
-- 将结果汇总至评估中心生成报告
+任务模块是 AgentGate 评测系统的任务调度入口，负责：
+- 管理评测任务的编排（创建/启动/停止）与任务侧执行留痕
+- 调度执行：**复用 `EvaluationService.launch()` 真链路**（与「发起评测·运行评估」
+  同一入口）执行测评集全部用例——快照固化、调用评测对象、等待 Trace、
+  运行评估器、产出门槛结果（2026-09 起替换此前的硬编码 demo 与伪造结果）
+- 将真实报告映射为 TaskRun 统计与 CaseExecution 逐用例记录
 
 ## 2. 目录结构
 
@@ -19,6 +20,7 @@ src/agentgate/task/
 ├── service.py            # SchedulerService 和 TaskExecutionService
 ├── repository.py         # SQLAlchemy 模型和仓储
 ├── api.py                # FastAPI 路由
+├── scheduler.py          # BackgroundScheduler（真链路执行体）
 ├── evaluation_center.py  # 评估中心客户端
 └── code_readme.md        # 本文件
 ```
@@ -158,6 +160,34 @@ class EvaluatorFactory:
 - `execute_case()`：执行单个测试用例
 - `cancel_task()`：取消正在运行的任务
 
+### 7.3 BackgroundScheduler（真链路执行体，scheduler.py）
+
+后台调度循环（默认 10 秒扫描 PENDING 任务），`_execute_task` 执行流程：
+
+```
+PENDING 任务
+  → TaskRun 置 RUNNING
+  → asyncio.to_thread(EvaluationService.launch(
+        target_id,   # 版本键，如 "ticket-approv-agent-v1"（versions() 的 id）
+        dataset_id,  # 数据集 ID（自动取最新 published 版本）
+        evaluator_ids=[task.evaluator_id],
+    ))
+  → 真实 Run（完整评测闭环：快照固化/invoke/等 Trace/评估/门槛）
+  → 从 engine.report 映射：
+       TaskRun.completed/passed/failed_cases、avg_score（0-100）
+       CaseExecution 逐用例（passed、score、评估器结果摘要）
+  → 任务与 TaskRun 置 SUCCESS；任何异常 → 双双置 FAIL（错误留日志）
+```
+
+要点：
+- **真实 Run 同时落在运行记录/结果报告页**（与「发起评测」产物同源可查）；
+- launch 为阻塞调用（每用例含 Trace 等待），经 `to_thread` 不阻塞调度循环；
+- 评测服务经 `agentgate.server.application.get_evaluation_service()` 获取
+  （注意：不是 `src.agentgate...`——此前三处该形态的导入在 src 布局下必失败，
+  已全部修复）；
+- 任务侧快照（target/dataset/evaluator_snapshot 表）继续作为任务系统审计
+  留痕；评测语义的权威快照在真实 Run 的 RunSnapshot 中（双留痕并存）。
+
 ## 8. 数据库模型
 
 参见 `repository.py` 中的 SQLAlchemy 模型：
@@ -193,9 +223,12 @@ class EvaluatorFactory:
 使用 pytest 运行测试：
 
 ```bash
-cd D:/hw/pythonwork/xql/agentgate
 pytest tests/task/ -v
 ```
+
+关键测试：`tests/task/test_real_execution.py`——任务真链路集成测试
+（创建 → 启动 → 真实执行 → 断言统计/逐用例结果/真实 Run 落库；含失败路径
+与未知评估器路径，使用 demo 目标零外部依赖）。
 
 ## 11. 依赖
 

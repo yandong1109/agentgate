@@ -41,10 +41,17 @@ logger = logging.getLogger(__name__)
 
 # 全局数据集服务引用
 _datasets_service: Any = None
+_evaluation_service: Any = None
+
 
 def get_datasets_service() -> Any:
     """获取数据集服务实例"""
     return _datasets_service
+
+
+def get_evaluation_service() -> Any:
+    """获取评测服务实例（任务调度器复用 launch 真链路）"""
+    return _evaluation_service
 
 from agentgate.task.repository import TaskRepository
 from agentgate.task.service import SchedulerService
@@ -317,8 +324,9 @@ def create_app(database_path: str | Path | None = None) -> FastAPI:
         repository, registration_provider=_registration_provider
     )
     datasets = service.dataset_service
-    global _datasets_service
+    global _datasets_service, _evaluation_service
     _datasets_service = datasets
+    _evaluation_service = service
 
     # 初始化任务仓储和服务
     from agentgate.task.repository import Base as TaskBase
