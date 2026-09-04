@@ -5,6 +5,14 @@
 > paths and module ownership are superseded by
 > [the architecture review ledger](../architecture-review-ledger.md).
 
+> [!IMPORTANT]
+> **Trace 传输方式变更（2026-09）**：Agent 侧 trace 产生/上报由 OTel/OTLP 切换为
+> trace-sdk（事件模型，file/Redis 传输）。本文件中 OpenTelemetry SDK / OTLP 导出
+> 相关章节描述的是**过渡期保留路径**（存量 OTel 目标继续可用）；新路径的 Agent 侧
+> 埋点方式为 trace-sdk `CallbackHandler` + AgentGate 桥接，设计见
+> [trace-sdk-integration-plan](../trace/trace-sdk-integration-plan.md)。
+> 引擎侧（invoke 契约、关联字段、Run/Trace 完成分离）不变。
+
 
 ## Goal
 
@@ -39,6 +47,16 @@ canonical Trace -> Evaluators -> Result -> Gate
 
 The Demo Agent proves AgentGate's production-shaped contracts. It is not a model for
 managing externally owned Agent or Skill assets.
+
+**Direction update (2026-09)**: the instrumentation path described below (OpenTelemetry
+SDK + OTLP/HTTP protobuf export) is the *transitional* path. The current direction for
+LangChain-shaped targets is the trace-sdk `CallbackHandler` plus the AgentGate bridge
+handler: instrumentation is fully automatic via LangChain callbacks, correlation is
+carried in event `metadata`, the trace_id is injected via `trace_context`, and
+`client.flush()` is forced before the invoke response returns. The engine-side contracts
+in this file (invoke request/response, correlation fields, Run vs Trace completion)
+apply unchanged to both paths. See
+[trace-sdk-integration-plan](../trace/trace-sdk-integration-plan.md).
 
 ## Current State and Gap
 

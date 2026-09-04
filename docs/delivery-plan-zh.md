@@ -125,7 +125,7 @@ R1、R2、R4 的开发不互相等待完整实现，但必须使用 R0 冻结的
 - 可访问的 Sandbox/Base URL 和凭证引用。
 - 至少一个真实 Agent、一个真实 Skill 及稳定 ID/版本。
 - 实际调用模式、正常与异常响应、最终状态和取消能力。
-- Trace 获取方式：`trace_id`、OTLP 或查询接口。
+- Trace 获取方式：`trace_id`、trace-sdk 事件流（新路径）或 OTLP（过渡保留）、查询接口。
 - 本轮唯一 LLM Provider、模型、凭证、预算和结构化输出能力。
 
 R0 完成标准：

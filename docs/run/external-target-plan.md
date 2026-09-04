@@ -11,6 +11,13 @@
 > trace-only adapters, production credential management, retry/cancellation scheduling,
 > and external platform write-back remain deferred.
 
+> [!IMPORTANT]
+> **Trace 传输方式变更（2026-09）**：Agent 侧 trace 产生/上报由 OTel/OTLP 切换为
+> trace-sdk（事件模型）。本文件的 Target 执行契约（invoke 请求/响应、关联字段、
+> 错误语义）**不变**；"Required OTLP resource/span attributes" 一节为过渡期保留
+> 路径，trace-sdk 路径的关联约定见 §Trace Correlation 增补与
+> [trace-sdk-integration-plan](../trace/trace-sdk-integration-plan.md)。
+
 
 ## Goal
 
@@ -454,7 +461,9 @@ Trace attributes, logs, or exceptions.
 - keeps an inline canonical Trace mode only for focused unit tests;
 - invokes the instrumented Demo Agent HTTP service for end-to-end acceptance;
 - the HTTP Demo Agent records behavior with the OpenTelemetry SDK and exports standard
-  OTLP/HTTP protobuf to AgentGate;
+  OTLP/HTTP protobuf to AgentGate (**transitional path**; the current direction for
+  LangChain-shaped targets is the trace-sdk CallbackHandler + AgentGate bridge, see
+  `docs/trace/trace-sdk-integration-plan.md`);
 - remains deterministic and requires no credential;
 - proves the same public target and telemetry contracts without an external platform.
 
@@ -584,6 +593,20 @@ agentgate.target.type
 agentgate.target.id
 agentgate.target.version
 ```
+
+**trace-sdk event correlation convention (2026-09)** — for targets instrumented with
+trace-sdk, the equivalent correlation is carried as follows:
+
+- the AgentGate bridge handler reads `run_id` / `case_id` / `turn_id` /
+  `invocation_id` from the invoke request body (already sent by the HTTP adapter)
+  and writes them into event `metadata`;
+- the target's trace_id is injected via `CallbackHandler(trace_context=...)` and must
+  equal the value registered in `pending_trace_correlation` — the traceparent header
+  remains the transport-side carrier and may be ignored by the Agent;
+- `final_state` is supplied by the invoke response body (adapter execution result,
+  highest precedence), not by telemetry events;
+- the bridge must force `client.flush()` before the invoke response returns, so
+  telemetry arrives within the engine's trace wait window.
 
 Target adapters create and propagate correlation context. The Trace module defines merge,
 deduplication, ordering, and completeness semantics in

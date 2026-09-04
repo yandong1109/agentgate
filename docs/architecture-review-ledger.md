@@ -659,6 +659,44 @@ application/
 - P1 keeps submission and worker-side execution in one module. Split them only if
   the module develops substantial independent complexity.
 
+## Decision record: trace transport switch, OTel → trace-sdk (2026-09-04)
+
+Recorded per the "recorded rather than lost" rule. Existing entries above are unchanged.
+
+- **Decision**: Agent-side trace generation/reporting switches from OpenTelemetry
+  (manual spans + OTLP/HTTP push to `/v1/traces`) to the in-house trace-sdk (event
+  model: TraceEvent/SpanEvent/ObservationEvent/SessionEvent/LLMRequestEvent; transport:
+  file/Redis/Kafka/direct-db, no HTTP ingest).
+- **Rationale**: LangChain targets become plug-and-play (one `CallbackHandler` replaces
+  per-agent manual OTLP export); LLM-rich semantics (tokens, TTFT, real LLM requests)
+  prepare the LLM-Judge evaluator (PRD P2); independent debugging surface via the
+  trace-sdk Trace Monitor UI.
+- **Scope discipline ("swap the two ends, keep the middle")**: only the generation side
+  (bridge handler) and the wire/receive side (`trace/receivers/trace_sdk.py`, file/Redis
+  pull + a normalizer branch) change. `merge`, `completeness`, trace storage tables,
+  RunEngine polling, the HTTP adapter, evaluators, and `result/` are untouched. The OTLP
+  receiver is retained during the gray-release window (G1–G3), so existing OTel targets
+  keep working and the 332-test regression suite must stay green without modification.
+- **Contract points**: correlation rides in event `metadata` (read from the invoke body
+  by the bridge); the bridge injects the AgentGate trace_id via `trace_context` so the
+  `pending_trace_correlation` match is preserved; `final_state` comes from the invoke
+  response (adapter execution result, highest precedence); TraceEvent arrival maps to
+  `trace_complete`. The frozen event→NormalizedSpan mapping table lives in
+  `docs/trace/trace-sdk-integration-plan.md`.
+- **Known limitations accepted**: turn-level completeness degrades to per-turn trace
+  aggregation for multi-turn cases; the skill-routing evaluator is not applicable on the
+  trace-sdk path unless the bridge adds `selected_skill`; Python/LangChain-only — other
+  targets keep the OTLP channel.
+- **External prerequisites (G0, blocking)**: trace-sdk repo must restore the missing
+  `trace_consumer/fields.py` (consumer and direct-db backends currently cannot run) and
+  persist `metadata/tags` in the PG schema before the Redis/PG receiving mode is used
+  (file mode is unaffected).
+- **Affected design docs**: `trace/ingestion-plan.md`, `trace/README.md`,
+  `run/external-target-plan.md`, `run/demo-agent-plan.md`,
+  `run/http-target-short-term-plan.md` (superseded, kept as history), `run/README.md`,
+  `delivery-plan-zh.md`. Authoritative new design:
+  `docs/trace/trace-sdk-integration-plan.md`.
+
 ## Next review item
 
 ```text
