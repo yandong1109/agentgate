@@ -17,3 +17,4 @@ logs/*
 *.log
 trace-*.json
 agentgate.db.bak.*
+.idea/
