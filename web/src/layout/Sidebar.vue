@@ -15,6 +15,7 @@ import {
   Aim,
   Folder,
   List,
+  List as TaskIcon,
 } from '@element-plus/icons-vue'
 import { useAppStore } from '@/stores/modules/app'
 import type { Component } from 'vue'
@@ -38,7 +39,7 @@ const appStore = useAppStore()
 // 顶级单项（总览/调优/实验对比）
 const topItems: MenuItem[] = [{ index: '/dashboard', label: '总览', icon: Odometer }]
 
-// 分组（资产管理 / 评测中心）
+// 分组（资产管理 / 评测中心 / 任务管理）
 const groups: MenuGroup[] = [
   {
     key: 'assets',
@@ -60,6 +61,14 @@ const groups: MenuGroup[] = [
       { index: '/results', label: '结果报告', icon: Document },
     ],
   },
+  {
+    key: 'task',
+    title: '任务管理',
+    icon: TaskIcon,
+    children: [
+      { index: '/tasks', label: '任务列表', icon: TaskIcon },
+    ],
+  },
 ]
 
 // 底部顶级单项
@@ -74,11 +83,12 @@ const activeMenu = computed(() => {
   if (path.startsWith('/runs/history')) return '/runs/history'
   if (path.startsWith('/runs')) return '/runs'
   if (path.startsWith('/results')) return '/results'
+  if (path.startsWith('/tasks')) return '/tasks'
   return path
 })
 
-// 展开的子菜单：资产管理 + 评测中心两组默认展开，主流程入口均直达
-const defaultOpeneds = computed(() => ['evaluation', 'assets'])
+// 展开的子菜单：资产管理 + 评测中心 + 任务管理三组默认展开，主流程入口均直达
+const defaultOpeneds = computed(() => ['evaluation', 'assets', 'task'])
 
 const asideWidth = computed(() => (appStore.sidebarCollapsed ? '64px' : '220px'))
 </script>

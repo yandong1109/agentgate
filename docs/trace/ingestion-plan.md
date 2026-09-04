@@ -9,6 +9,14 @@
 > parts of checkpoints 4–5 are implemented and verified on `codex/trace-ingestion`.
 > Remaining work is listed under **Deferred Work and Integration Gaps** below.
 
+> [!IMPORTANT]
+> **Trace 传输方式变更（2026-09）**：Agent 侧 trace 产生/上报由 OTel/OTLP 切换为
+> trace-sdk（事件模型，file/Redis 传输）。本文件中的 OTLP 章节描述的是**过渡期保留
+> 路径**；新路径设计见
+> [trace-sdk-integration-plan](trace-sdk-integration-plan.md)。canonical Trace /
+> merge / completeness / 存储与评测器等中间层语义**不受切换影响**，本文所列幂等、
+> 冲突、排序、修订、Result 锚定等契约对新路径同等适用。
+
 
 ## Goal
 
@@ -407,8 +415,12 @@ These models distinguish transport/batch state from the canonical evaluation Tra
 
 Initial support:
 
-- OTLP/HTTP protobuf traces as the primary standard SDK path;
+- OTLP/HTTP protobuf traces as the primary standard SDK path (**transitional**:
+  retained during the trace-sdk gray-release window for existing OTel targets);
 - OTLP/HTTP JSON traces for tests, debugging, and compatible exporters;
+- **trace-sdk event stream** as the second input source (file / Redis pull; see
+  [trace-sdk-integration-plan](trace-sdk-integration-plan.md) for the event-to-
+  NormalizedSpan mapping and receiving modes);
 - `resourceSpans`;
 - `scopeSpans` and legacy `instrumentationLibrarySpans`;
 - standard AnyValue string, boolean, integer, double, bytes, array, and key-value list;
@@ -470,6 +482,28 @@ Lower-precedence disagreement is recorded but cannot silently overwrite the auth
 value.
 
 Generic attributes are never guessed to be final output or final state.
+
+## trace-sdk Event Normalization
+
+The trace-sdk input path normalizes the event model (TraceEvent / SpanEvent /
+ObservationEvent / SessionEvent / LLMRequestEvent) into the same NormalizedSpan /
+NormalizedSignal contracts consumed by merge and completeness:
+
+- SpanEvent maps one-to-one to NormalizedSpan; `span_type` maps to SpanKind
+  (`tool`→TOOL, `agent`/`chain`/`llm`→AGENT, `retriever`→TOOL);
+- correlation (run/case/turn/invocation) is carried in event `metadata` by the
+  bridge handler and read by this normalization branch — equivalent to the OTLP
+  `agentgate.*` attribute path;
+- TraceEvent arrival maps to the `trace_complete` signal; TraceEvent.output maps
+  to `final_output`. `final_state` is **not** event-sourced: it comes from the
+  target adapter's execution result (highest precedence, unchanged);
+- ObservationEvent / LLMRequestEvent are attached as `llm.*` attributes
+  (reserved for LLM evaluators); SessionEvent is not mapped.
+
+The frozen mapping table, bridge design, and receiving modes (file / Redis) are
+specified in [trace-sdk-integration-plan](trace-sdk-integration-plan.md). This
+plan's merge, ordering, completeness, persistence, and late-arrival contracts
+apply unchanged to both input paths.
 
 ## Ingestion Pipeline
 
@@ -686,6 +720,12 @@ GET /health
 ```
 
 Do not use `GET /v1/traces` as receiver health.
+
+The trace-sdk input path is **pull-based** (no HTTP ingest): the
+`trace/receivers/trace_sdk.py` receiver pulls events from the SDK file backend
+(same-machine default) or Redis Stream (independent consumer group). Both
+channels feed the same normalization → merge → completeness pipeline. The OTLP
+endpoint above remains available during the gray-release window.
 
 Internal debugging APIs may expose canonical Trace status and bounded conflicts, but not
 raw unredacted telemetry.
@@ -930,6 +970,15 @@ At minimum:
 30. existing risky/fixed Demo evaluation outcomes remain unchanged.
 31. the standard Python OTLP HTTP exporter can send Demo Agent spans without a custom
     exporter.
+32. trace-sdk SpanEvent (span_type=tool, name=tool name) passes required/forbidden
+    tool evaluators after normalization;
+33. a trace-sdk TraceEvent triggers trace_complete and the canonical Trace converges
+    to COMPLETE;
+34. final_state is sourced from the adapter execution result regardless of events;
+35. re-pulling the same event file is idempotent (duplicate count, no conflict) and
+    partially-written JSONL lines are tolerated (skipped, re-read next poll);
+36. the bridge-injected trace_id matches `pending_trace_correlation` without
+    run/case attribute fallback.
 
 End-to-end acceptance:
 

@@ -1,4 +1,4 @@
-"""Normalize bounded OTLP/HTTP JSON into transport-independent trace batches."""
+"""Normalize bounded OTLP/HTTP JSON or trace-sdk events into trace batches."""
 
 from __future__ import annotations
 
@@ -6,9 +6,10 @@ import base64
 import json
 import re
 from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import Any
 
-from agentgate.domain import SpanKind, canonical_json, content_sha256
+from agentgate.domain import SpanKind, canonical_json, content_sha256, freeze_json
 from agentgate.trace.models import (
     NormalizedSignal, NormalizedSpan, OtlpIngestionLimits, TraceBatch, TraceConflict,
 )
@@ -349,5 +350,323 @@ def normalize_otlp_json(
     return TraceBatch(
         content_sha256=content_sha256(payload), spans=tuple(spans),
         signals=tuple(signals), conflicts=tuple(conflicts), errors=tuple(errors),
+        rejected_spans=rejected,
+    )
+
+
+# ── trace-sdk 事件归一化分支（trace-sdk-integration-plan §Event Normalization）──
+#
+# 输入为 trace-sdk 的事件 JSON（file 后端 JSONL 逐行 / Redis Stream 消息）。
+# 与 OTLP 分支在 NormalizedSpan/NormalizedSignal 处汇合，下游 merge/completeness
+# 零改动。冻结契约见 docs/trace/trace-sdk-integration-plan.md 映射表。
+
+TRACE_SDK_BATCH_SOURCE = "trace-sdk"
+
+_EVENT_ID_MAX = 128
+_SPAN_TYPE_TO_KIND = {
+    "tool": SpanKind.TOOL,
+    "retriever": SpanKind.TOOL,
+    "agent": SpanKind.AGENT,
+    "chain": SpanKind.AGENT,
+    "llm": SpanKind.AGENT,
+    "span": SpanKind.EVENT,
+}
+_ROOT_PARENT_VALUES = {"", "root", None}
+
+
+def _event_id(value: Any, field: str) -> str:
+    """trace-sdk 的 span_id/event_id 为 UUID 字符串——放宽为非空有界字符串。"""
+    if not isinstance(value, str) or not value.strip() or len(value) > _EVENT_ID_MAX:
+        raise ValueError(f"trace-sdk event {field} is missing or invalid")
+    return value.strip()
+
+
+def _iso_to_nano(value: Any, field: str) -> int | None:
+    if value in (None, ""):
+        return None
+    if not isinstance(value, str):
+        raise ValueError(f"trace-sdk {field} must be an ISO-8601 string")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(f"trace-sdk {field} is not valid ISO-8601") from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return int(parsed.timestamp() * 1_000_000_000)
+
+
+def _event_correlation(event: dict[str, Any]) -> dict[str, Any]:
+    """桥接约定：关联字段在事件 metadata（agentgate.* 键）。"""
+    metadata = event.get("metadata")
+    return metadata if isinstance(metadata, dict) else {}
+
+
+def _attr_str(value: Any) -> str:
+    return value if isinstance(value, str) else json.dumps(
+        value, ensure_ascii=False, sort_keys=True
+    )
+
+
+def _trace_sdk_span(
+    event: dict[str, Any],
+    limits: OtlpIngestionLimits,
+    correlation_resolver: Callable[
+        [str], tuple[str, str] | tuple[str, str, str] | None
+    ] | None,
+) -> tuple[NormalizedSpan, list[NormalizedSignal]]:
+    trace_id = _event_id(event.get("trace_id"), "trace_id")
+    span_id = _event_id(event.get("span_id"), "span_id")
+    parent = event.get("parent_span_id")
+    parent_span_id = None if parent in _ROOT_PARENT_VALUES else _event_id(
+        parent, "parent_span_id"
+    )
+
+    attrs: dict[str, Any] = {}
+    metadata = _event_correlation(event)
+    for key in ("run", "case", "turn", "invocation"):
+        value = metadata.get(f"agentgate.{key}.id")
+        if isinstance(value, str) and value:
+            attrs[f"agentgate.{key}.id"] = value
+    invocation_id = attrs.get("agentgate.invocation.id")
+    if "agentgate.run.id" not in attrs or "agentgate.case.id" not in attrs:
+        if correlation_resolver is None:
+            raise ValueError("missing agentgate.run.id/case.id and no resolver")
+        resolved = correlation_resolver(trace_id)
+        if resolved is None:
+            raise ValueError(f"unmatched trace_id in pending correlation: {trace_id}")
+        attrs.setdefault("agentgate.run.id", resolved[0])
+        attrs.setdefault("agentgate.case.id", resolved[1])
+        if len(resolved) > 2 and invocation_id is None:
+            attrs["agentgate.invocation.id"] = resolved[2]
+            invocation_id = resolved[2]
+
+    span_type = event.get("span_type")
+    kind = _SPAN_TYPE_TO_KIND.get(
+        span_type if isinstance(span_type, str) else "", SpanKind.EVENT
+    )
+    span_attrs: dict[str, Any] = {
+        "trace_sdk.span_type": span_type if isinstance(span_type, str) else "",
+    }
+    for source_key, attr_key in (
+        ("input", "span.input"), ("output", "span.output"),
+        ("tool_name", "tool.name"), ("model", "llm.model_name"),
+    ):
+        if event.get(source_key) is not None:
+            span_attrs[attr_key] = _attr_str(event[source_key])
+    if isinstance(event.get("error_info"), dict):
+        span_attrs["error_info"] = json.dumps(
+            event["error_info"], ensure_ascii=False, sort_keys=True
+        )
+    if metadata:
+        span_attrs["trace_sdk.metadata"] = json.dumps(
+            metadata, ensure_ascii=False, sort_keys=True
+        )
+
+    start = _iso_to_nano(event.get("started_at"), "started_at")
+    end = None
+    if start is not None and isinstance(event.get("duration_ms"), (int, float)):
+        end = start + int(event["duration_ms"] * 1_000_000)
+    name = event.get("name")
+    if not isinstance(name, str) or not name:
+        raise ValueError("trace-sdk span name is required")
+
+    span = NormalizedSpan(
+        run_id=attrs["agentgate.run.id"],
+        case_id=attrs["agentgate.case.id"],
+        source_trace_id=trace_id,
+        source_span_id=span_id,
+        parent_span_id=parent_span_id,
+        turn_id=attrs.get("agentgate.turn.id"),
+        invocation_id=invocation_id,
+        name=name,
+        kind=kind,
+        start_time_unix_nano=start,
+        end_time_unix_nano=end,
+        attributes=freeze_json(span_attrs),
+        status="error" if event.get("status") == "error" else "unset",
+    )
+    return span, []
+
+
+def _trace_sdk_trace_event(
+    event: dict[str, Any],
+    limits: OtlpIngestionLimits,
+    correlation_resolver: Callable[
+        [str], tuple[str, str] | tuple[str, str, str] | None
+    ] | None,
+) -> tuple[NormalizedSpan, list[NormalizedSignal]]:
+    """TraceEvent 落地 → terminal EVENT span + trace_complete/turn_complete/final_output。
+
+    信号必须挂在已接受的 span 上（service.ingest 校验信号的 source span），
+    故 TraceEvent 同时归一化为一个 ``agent.complete`` EVENT span——与 OTLP 路径
+    的 terminal span 模式对称。以 event_id 充当 span 身份（确定性 + 幂等）。
+    final_state 不从事件供给（走 invoke 响应，适配器结果优先级最高）。
+    """
+    trace_id = _event_id(event.get("trace_id"), "trace_id")
+    event_id = _event_id(event.get("event_id"), "event_id")
+    attrs = _event_correlation(event)
+    run_id = attrs.get("agentgate.run.id")
+    case_id = attrs.get("agentgate.case.id")
+    invocation_id = attrs.get("agentgate.invocation.id")
+    turn_id = attrs.get("agentgate.turn.id")
+    if not run_id or not case_id:
+        if correlation_resolver is None:
+            raise ValueError("missing agentgate.run.id/case.id and no resolver")
+        resolved = correlation_resolver(trace_id)
+        if resolved is None:
+            raise ValueError(f"unmatched trace_id in pending correlation: {trace_id}")
+        run_id, case_id = resolved[0], resolved[1]
+        if invocation_id is None and len(resolved) > 2:
+            invocation_id = resolved[2]
+
+    span = NormalizedSpan(
+        run_id=run_id, case_id=case_id,
+        source_trace_id=trace_id, source_span_id=event_id,
+        turn_id=turn_id, invocation_id=invocation_id,
+        name="agent.complete", kind=SpanKind.EVENT,
+        status="error" if event.get("status") == "error" else "unset",
+        attributes=freeze_json({
+            "trace_sdk.event_type": "trace",
+            "trace_sdk.status": str(event.get("status", "")),
+        }),
+    )
+    signals = [NormalizedSignal(
+        run_id=run_id, case_id=case_id,
+        source_trace_id=trace_id, source_span_id=event_id,
+        turn_id=turn_id,
+        invocation_id=invocation_id,
+        kind="trace_complete", value=True,
+    )]
+    # 逐轮完成信号：桥接在 TraceEvent metadata 写 agentgate.turn.id（多轮为每轮
+    # 一个 TraceEvent，见 trace-sdk-integration-plan §C-4）。轮次未知时不发——
+    # service.ingest 会跳过无轮次的 turn_complete。
+    if turn_id:
+        signals.append(NormalizedSignal(
+            run_id=run_id, case_id=case_id,
+            source_trace_id=trace_id, source_span_id=event_id,
+            turn_id=turn_id,
+            invocation_id=invocation_id,
+            kind="turn_complete", value=True,
+        ))
+    output = event.get("output")
+    if output is not None:
+        signals.append(NormalizedSignal(
+            run_id=run_id, case_id=case_id,
+            source_trace_id=trace_id, source_span_id=event_id,
+            turn_id=turn_id,
+            invocation_id=invocation_id,
+            kind="final_output", value=output,
+        ))
+    # final_state 经桥接写入 metadata（对称 OTLP terminal span 的
+    # agentgate.final_state.json 属性；引擎不注入适配器结果，见实现差异记录）
+    final_state_raw = attrs.get("agentgate.final_state.json")
+    if isinstance(final_state_raw, str) and final_state_raw:
+        try:
+            final_state_value = json.loads(final_state_raw)
+        except json.JSONDecodeError as exc:
+            raise ValueError("agentgate.final_state.json is not valid JSON") from exc
+        if isinstance(final_state_value, dict):
+            signals.append(NormalizedSignal(
+                run_id=run_id, case_id=case_id,
+                source_trace_id=trace_id, source_span_id=event_id,
+                turn_id=turn_id,
+                invocation_id=invocation_id,
+                kind="final_state", value=final_state_value,
+            ))
+    return span, signals
+
+
+def normalize_trace_sdk_events(
+    events: list[dict[str, Any]],
+    limits: OtlpIngestionLimits | None = None, *,
+    correlation_resolver: Callable[
+        [str], tuple[str, str] | tuple[str, str, str] | None
+    ] | None = None,
+) -> TraceBatch:
+    """把 trace-sdk 事件列表归一化为 TraceBatch（与 OTLP 分支同一汇合点）。"""
+    limits = limits or OtlpIngestionLimits()
+    if not isinstance(events, list):
+        raise ValueError("trace-sdk events must be a list")
+    if len(events) > limits.max_spans:
+        raise ValueError("trace-sdk event batch exceeds span limit")
+
+    spans: list[NormalizedSpan] = []
+    signals: list[NormalizedSignal] = []
+    conflicts: list[TraceConflict] = []
+    errors: list[str] = []
+    rejected = 0
+
+    for index, event in enumerate(events):
+        try:
+            if not isinstance(event, dict):
+                raise ValueError("event must be an object")
+            event_type = event.get("event_type")
+            if event_type == "span":
+                span, span_signals = _trace_sdk_span(
+                    event, limits, correlation_resolver
+                )
+                spans.append(span)
+                signals.extend(span_signals)
+            elif event_type == "trace":
+                terminal_span, trace_signals = _trace_sdk_trace_event(
+                    event, limits, correlation_resolver
+                )
+                spans.append(terminal_span)
+                signals.extend(trace_signals)
+            elif event_type == "observation":
+                # 冻结契约 v0.1：独立 EVENT span（避免晚到合并造成同 span 伪冲突）
+                obs = dict(event)
+                obs.setdefault("event_type", "span")
+                obs["span_id"] = obs.get("observation_id") or obs.get("event_id")
+                obs["name"] = obs.get("name") or "llm.observation"
+                obs["span_type"] = "span"
+                obs["parent_span_id"] = obs.get("span_id") and event.get("span_id")
+                if obs["parent_span_id"] == obs["span_id"]:
+                    obs["parent_span_id"] = None
+                span, _ = _trace_sdk_span(obs, limits, correlation_resolver)
+                span = span.model_copy(update={
+                    "kind": SpanKind.EVENT,
+                    "name": "llm.observation",
+                    "attributes": freeze_json({
+                        "llm.observation": json.dumps(
+                            {
+                                k: event.get(k) for k in
+                                ("model", "prompt_tokens", "completion_tokens")
+                            }, ensure_ascii=False,
+                        ),
+                    }),
+                })
+                spans.append(span)
+            elif event_type == "llm_request":
+                req = dict(event)
+                req["event_type"] = "span"
+                req["span_id"] = req.get("event_id")
+                req["name"] = "llm.request"
+                req["span_type"] = "span"
+                req["parent_span_id"] = event.get("span_id")
+                span, _ = _trace_sdk_span(req, limits, correlation_resolver)
+                span = span.model_copy(update={
+                    "kind": SpanKind.EVENT,
+                    "name": "llm.request",
+                })
+                spans.append(span)
+            elif event_type == "session":
+                continue  # 会话语义与 run/case 不同构，不映射
+            else:
+                raise ValueError(f"unknown trace-sdk event_type: {event_type!r}")
+        except (TypeError, ValueError) as exc:
+            rejected += 1
+            if len(errors) < 20:
+                errors.append(f"event {index}: {exc}")
+
+    batch_payload = json.dumps(events, ensure_ascii=False, sort_keys=True)
+    normalized_bytes = len(canonical_json([s.model_dump(mode="json") for s in spans]))
+    if normalized_bytes > limits.max_normalized_bytes:
+        raise ValueError("normalized trace-sdk batch exceeds byte limit")
+    return TraceBatch(
+        source=TRACE_SDK_BATCH_SOURCE,
+        content_sha256=content_sha256(batch_payload),
+        spans=tuple(spans), signals=tuple(signals),
+        conflicts=tuple(conflicts), errors=tuple(errors),
         rejected_spans=rejected,
     )

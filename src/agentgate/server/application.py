@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 import os
+from contextlib import asynccontextmanager
 import re
 from io import BytesIO
 from pathlib import Path
@@ -32,6 +35,50 @@ from agentgate.trace.receivers.otlp_http import (
     ingest_otlp_http_json, ingest_otlp_http_protobuf,
 )
 from agentgate.trace.models import OtlpIngestionLimits
+from agentgate.task import api as task_api
+
+logger = logging.getLogger(__name__)
+
+# 全局数据集服务引用
+_datasets_service: Any = None
+
+def get_datasets_service() -> Any:
+    """获取数据集服务实例"""
+    return _datasets_service
+
+from agentgate.task.repository import TaskRepository
+from agentgate.task.service import SchedulerService
+from agentgate.target import api as target_api
+from agentgate.target.repository import Base as TargetBase, TargetRepository
+from agentgate.target.service import TargetService
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+
+def setup_logging(log_dir: str = "logs") -> None:
+    """配置日志到指定目录"""
+    log_path = Path(log_dir)
+    log_path.mkdir(parents=True, exist_ok=True)
+
+    # 日志文件路径
+    log_file = log_path / "agentgate.log"
+
+    # 配置根日志记录器
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        handlers=[
+            logging.FileHandler(log_file, encoding="utf-8"),
+            logging.StreamHandler(),
+        ],
+    )
+
+    # 单独配置 task 模块的日志级别
+    task_logger = logging.getLogger("agentgate.task")
+    task_logger.setLevel(logging.INFO)
+
+    scheduler_logger = logging.getLogger("agentgate.task.scheduler")
+    scheduler_logger.setLevel(logging.INFO)
 
 
 class LaunchRequest(BaseModel):
@@ -239,10 +286,90 @@ def _excel_content_disposition(name: str, version: int) -> str:
 
 
 def create_app(database_path: str | Path | None = None) -> FastAPI:
-    repository = SQLiteRepository(database_path or os.getenv("AGENTGATE_DB", "agentgate.db"))
-    service = EvaluationService(repository)
+    # 初始化日志配置
+    setup_logging()
+    logger.info("日志系统初始化完成")
+
+    db_path = database_path or os.getenv("AGENTGATE_DB", "agentgate.db")
+    logger.info(f"使用数据库: {db_path}")
+    repository = SQLiteRepository(db_path)
+
+    # 评测对象模块（target）：SQLAlchemy 纯增量建表，回退代码可直接忽略新表
+    target_engine = create_engine(
+        f"sqlite:///{db_path}", connect_args={"check_same_thread": False}
+    )
+    TargetBase.metadata.create_all(target_engine)
+    TargetSessionFactory = sessionmaker(bind=target_engine)
+    target_repository = TargetRepository(TargetSessionFactory)
+    target_service = TargetService(
+        target_repository,
+        has_run_references=lambda external_id: any(
+            run.snapshot.target.ref.external_target_id == external_id
+            for run in repository.list_runs()
+        ),
+    )
+    target_api.set_services(target_service)
+
+    def _registration_provider():
+        return target_service.build_registrations()
+
+    service = EvaluationService(
+        repository, registration_provider=_registration_provider
+    )
     datasets = service.dataset_service
-    app = FastAPI(title="AgentGate", version="0.1.0")
+    global _datasets_service
+    _datasets_service = datasets
+
+    # 初始化任务仓储和服务
+    from agentgate.task.repository import Base as TaskBase
+    task_engine = create_engine(f"sqlite:///{db_path}")
+    TaskBase.metadata.create_all(task_engine)
+    TaskSession = sessionmaker(bind=task_engine)
+    task_session = TaskSession()
+    task_repository = TaskRepository(task_session)
+    scheduler_service = SchedulerService(task_repository)
+    task_api.set_services(scheduler_service, None)
+
+    # 创建 lifespan 事件处理器
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        # 启动时：启动后台调度器（测试用10秒间隔）
+        loop = asyncio.get_event_loop()
+        loop.create_task(scheduler_service.start_scheduler(interval_seconds=10))
+        logger.info("调度器任务已创建")
+        # trace-sdk file 接收器（env 开关启用，见 trace-sdk-integration-plan）
+        import threading
+
+        from agentgate.trace.receivers import TraceSdkFileReceiver
+
+        receiver_stop = None
+        receiver_thread = None
+        trace_sdk_root = os.getenv("AGENTGATE_TRACE_SDK_FILE_ROOT", "").strip()
+        if trace_sdk_root:
+            receiver = TraceSdkFileReceiver(trace_sdk_root, repository)
+            receiver_stop = threading.Event()
+            receiver_thread = threading.Thread(
+                target=receiver.run_forever,
+                kwargs={
+                    "interval_seconds": float(os.getenv(
+                        "AGENTGATE_TRACE_SDK_POLL_SECONDS", "1.0"
+                    )),
+                    "stop": receiver_stop,
+                },
+                daemon=True,
+                name="agentgate-trace-sdk-receiver",
+            )
+            receiver_thread.start()
+            logger.info("trace-sdk file 接收器已启动: root=%s", trace_sdk_root)
+        yield
+        # 关闭时：停止调度器与接收器
+        scheduler_service.stop_scheduler()
+        if receiver_stop is not None:
+            receiver_stop.set()
+            receiver_thread.join(timeout=5)
+        target_engine.dispose()
+
+    app = FastAPI(title="AgentGate", version="0.1.0", lifespan=lifespan)
     app.add_middleware(
         ExcelRequestBodyLimitMiddleware,
         max_bytes=MAX_EXCEL_REQUEST_BYTES,
@@ -610,9 +737,12 @@ def create_app(database_path: str | Path | None = None) -> FastAPI:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         return report
 
+    api.include_router(task_api.router)
+    api.include_router(target_api.router)
     app.include_router(api)
     app.state.repository = repository
     app.state.service = service
+    app.state.target_service = target_service
     return app
 
 

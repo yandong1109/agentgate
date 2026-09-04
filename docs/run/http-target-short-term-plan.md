@@ -1,5 +1,13 @@
 # HTTP Target Adapter + OTel Trace Correlation — Short-Term Plan
 
+> [!IMPORTANT]
+> **Trace 传输方式变更（2026-09）**：本文件描述的 OTLP 关联方案已由 trace-sdk
+> 路径（事件模型，file/Redis 传输）接替。**本文保留为历史实施记录**：其大部分
+> 条目已实施完毕且仍在生产运行（灰度窗口期 OTLP 通道保留）；尚未实施的条目不再
+> 按本文件推进。新路径设计见
+> [trace-sdk-integration-plan](../trace/trace-sdk-integration-plan.md)；HTTP 适配器
+> 本身（invoke 契约、头部、错误语义）不受切换影响。
+>
 > Status: implemented and verified on `codex/trace-ingestion` (2026-08-25).
 > Modification level: **M** (new target domain contract + HTTP adapter + RunEngine
 > refactor + OTel trace-correlation mechanism; no Architecture Rule is changed).
