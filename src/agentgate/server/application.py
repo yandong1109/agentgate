@@ -337,9 +337,36 @@ def create_app(database_path: str | Path | None = None) -> FastAPI:
         loop = asyncio.get_event_loop()
         loop.create_task(scheduler_service.start_scheduler(interval_seconds=10))
         logger.info("调度器任务已创建")
+        # trace-sdk file 接收器（env 开关启用，见 trace-sdk-integration-plan）
+        import threading
+
+        from agentgate.trace.receivers import TraceSdkFileReceiver
+
+        receiver_stop = None
+        receiver_thread = None
+        trace_sdk_root = os.getenv("AGENTGATE_TRACE_SDK_FILE_ROOT", "").strip()
+        if trace_sdk_root:
+            receiver = TraceSdkFileReceiver(trace_sdk_root, repository)
+            receiver_stop = threading.Event()
+            receiver_thread = threading.Thread(
+                target=receiver.run_forever,
+                kwargs={
+                    "interval_seconds": float(os.getenv(
+                        "AGENTGATE_TRACE_SDK_POLL_SECONDS", "1.0"
+                    )),
+                    "stop": receiver_stop,
+                },
+                daemon=True,
+                name="agentgate-trace-sdk-receiver",
+            )
+            receiver_thread.start()
+            logger.info("trace-sdk file 接收器已启动: root=%s", trace_sdk_root)
         yield
-        # 关闭时：停止调度器
+        # 关闭时：停止调度器与接收器
         scheduler_service.stop_scheduler()
+        if receiver_stop is not None:
+            receiver_stop.set()
+            receiver_thread.join(timeout=5)
         target_engine.dispose()
 
     app = FastAPI(title="AgentGate", version="0.1.0", lifespan=lifespan)

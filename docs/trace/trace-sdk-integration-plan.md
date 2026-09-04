@@ -9,10 +9,16 @@
 
 ## 状态
 
-- 版本：v0.1（2026-09-04 评审通过稿）
+- 版本：v0.2（2026-09-04 G1 实施后修订：映射表按实现差异更新）
 - 代码基线：`integration/p1-new`（`50168e6`）
 - trace-sdk 基线：`/Users/baibo/01-XunZhan/trace-sdk`（tracev2-master）
-- 实施状态：未开始（G0 前置项未关闭）
+- 实施状态：**G1 完成**——normalizer 事件分支（`normalize_trace_sdk_events`）、
+  file 接收器（`trace/receivers/trace_sdk.py`）、server 接线
+  （`AGENTGATE_TRACE_SDK_FILE_ROOT` / `AGENTGATE_TRACE_SDK_POLL_SECONDS`）、
+  桥接（`agentgate/contrib/agentgate_bridge.py`，轻量 writer 双模式）、
+  Ticket-Approv-Agent 已切换（无 root 时回退 OTLP）。G1 验收全绿：后端
+  373（含新增 41，旧 332 零修改）、E2E 15（targets 三旅程走新通道）、全链路
+  Run gate pass。G2（Redis 模式）与多轮验证后置。
 
 ## 目标
 
@@ -108,12 +114,18 @@ trace-sdk 无 `agentgate.trace.complete` / `final_state.json` 等语义信号。
 桥接（双路供给）：
 
 1. **trace 级完成**：归一化分支把 TraceEvent 落地（`end_trace` 时产生，语义 =
-   本次 Agent 运行结束）映射为 `trace_complete` 信号；
+   本次 Agent 运行结束）映射为 terminal EVENT span（`agent.complete`）+
+   `trace_complete` 信号；
 2. **final_output**：TraceEvent.output 映射为 `final_output` 信号；
-3. **final_state**：不依赖事件——走既有优先级链顶端"适配器执行结果"：HTTP invoke
-   响应体必含 `final_state`（评测对象接入契约），引擎已有机制直接采用，**零改动**；
-4. **turn 级完成**：trace-sdk 无 turn 概念。单轮用例以 trace_complete 兼代；多轮
-   用例为已知限制（§8），POC 阶段桥接层为每轮注入独立 trace，按轮聚合。
+3. **final_state**：实现修订——桥接把 final_state 写入 TraceEvent metadata
+   （`agentgate.final_state.json`，对称 OTLP terminal span 属性），归一化分支
+   发 `final_state` 信号。（原设计"走 invoke 响应（适配器结果优先级最高）"：
+   该优先级在既有实现中未落地，评测终态断言实际依赖 telemetry 供 state，故
+   沿用信号路径，中间层零改动）；
+4. **turn 级完成**：桥接在 TraceEvent metadata 写 `agentgate.turn.id`，归一化
+   分支发 `turn_complete` 信号；单轮用例一个 TraceEvent 即完成；多轮用例为
+   每轮一个 TraceEvent（每轮独立 trace_id，靠 metadata 关联聚合到同一
+   run/case）——轮次聚合为已知限制（§8）。
 
 ### D. 接收通道缺失
 
@@ -132,7 +144,7 @@ trace-sdk 无 HTTP 摄取端点。新增 `trace/receivers/trace_sdk.py`：
 | trace-sdk 事件/字段 | AgentGate NormalizedSpan / 信号 | 说明 |
 |---|---|---|
 | SpanEvent | NormalizedSpan | 一对一 |
-| SpanEvent.trace_id / span_id / parent_span_id | source_trace_id / source_span_id / parent_span_id | 身份三件套直接平移 |
+| SpanEvent.trace_id / span_id / parent_span_id | source_trace_id / source_span_id / parent_span_id | 身份三件套直接平移（UUID 字符串放宽校验；根 span 的空值/"root" 归一为 None） |
 | SpanEvent.span_type = tool | SpanKind.TOOL | 关键映射：必需/禁用工具评估器依赖 |
 | SpanEvent.span_type = agent / chain | SpanKind.AGENT | |
 | SpanEvent.span_type = llm | SpanKind.AGENT（属性保留 span_type） | 观测价值为主 |
@@ -141,11 +153,13 @@ trace-sdk 无 HTTP 摄取端点。新增 `trace/receivers/trace_sdk.py`：
 | SpanEvent.input / output / metadata | attributes（点路径 `span.input` / `span.output` / `metadata.*`） | 含桥接写入的 run/case 关联 |
 | SpanEvent.started_at / duration_ms | start_time_unix_nano / end_time_unix_nano | ISO-8601 → 纳秒换算 |
 | SpanEvent.status = error | status="error" + attributes 保留 error_info | |
-| TraceEvent | 终态信号组 | `end_trace` 时产生 |
-| TraceEvent.output | final_output 信号 | |
+| TraceEvent | **terminal EVENT span（`agent.complete`）+ 终态信号组** | 信号必须挂在已接受的 span 上（service.ingest 校验），故 TraceEvent 同时归一化为一个 EVENT span——与 OTLP terminal span 模式对称；event_id 充当 span/信号身份（确定性 + 幂等） |
 | TraceEvent.status | trace_complete 信号（success/error 均视为完成） | |
-| final_state | 无映射（走 invoke 响应，适配器结果优先级最高） | 见 §C-3 |
-| ObservationEvent / LLMRequestEvent | attributes 附加（`llm.*`） | 评测暂不消费，留 LLM Judge 用 |
+| TraceEvent.metadata 的 agentgate.turn.id | turn_complete 信号 | 桥接契约：TraceEvent metadata 必带轮次 ID；多轮为每轮一个 TraceEvent（§C-4） |
+| TraceEvent.output | final_output 信号 | |
+| TraceEvent.metadata 的 agentgate.final_state.json | final_state 信号 | **实现修订**：原设计"final_state 走 invoke 响应（适配器结果优先级）"——该优先级在既有实现中未落地（OTLP 路径实际由 terminal span 属性供 state），故改为桥接把 final_state 写入 TraceEvent metadata，对称 OTLP 的 `agentgate.final_state.json` 属性 |
+| ObservationEvent | **独立 EVENT span（`llm.observation`）** | 实现修订：原设计"附加为 span attributes"会造成晚到的 observation 并入 span → 同身份不同内容 → 伪冲突（违反反漂移规则 #6）；改为独立 span（observation_id 为身份） |
+| LLMRequestEvent | 独立 EVENT span（`llm.request`） | 同上 |
 | SessionEvent | 不映射 | 会话语义与 run/case 不同构 |
 
 ## 代码改动清单
