@@ -12,6 +12,7 @@ import evaluatorsRoutes from './modules/evaluators'
 import optimizationRoutes from './modules/optimization'
 import experimentsRoutes from './modules/experiments'
 import traceRoutes from './modules/trace'
+import tasksRoutes from './modules/tasks'
 
 const layoutChildren: RouteRecordRaw[] = [
   ...runsRoutes,
@@ -23,6 +24,7 @@ const layoutChildren: RouteRecordRaw[] = [
   ...optimizationRoutes,
   ...experimentsRoutes,
   ...traceRoutes,
+  ...tasksRoutes,
 ]
 
 const routes: RouteRecordRaw[] = [

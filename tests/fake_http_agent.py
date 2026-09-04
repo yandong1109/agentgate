@@ -16,6 +16,7 @@ class FakeHttpAgent:
         self, repository=None, *, behavior: str = "success",
         trace_export: bool = True, extra_span_count: int = 0,
         export_batch_size: int = 100, include_duplicate: bool = False,
+        port: int = 0,
     ) -> None:
         self.repository = repository
         self.behavior = behavior
@@ -28,7 +29,9 @@ class FakeHttpAgent:
         self.exported_trace_ids: list[str] = []
         self.export_reports = []
         self.status_before_terminal: str | None = None
-        self._server = ThreadingHTTPServer(("127.0.0.1", 0), _make_handler(self))
+        self._server = ThreadingHTTPServer(
+            ("127.0.0.1", port), _make_handler(self),
+        )
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
         self._thread.start()
 

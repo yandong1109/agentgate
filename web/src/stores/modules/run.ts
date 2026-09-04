@@ -20,6 +20,12 @@ export const useRunStore = defineStore('run', {
     setVersion(version: string) {
       this.selectedVersion = version
     },
+    // 版本列表加载后校正默认选择：当前值失效时回落到 is_latest 项
+    ensureVersionExists(versions: { id: string; is_latest: boolean }[]) {
+      if (versions.some((item) => item.id === this.selectedVersion)) return
+      this.selectedVersion =
+        versions.find((item) => item.is_latest)?.id ?? versions[0]?.id ?? this.selectedVersion
+    },
     setDataset(datasetId: string) {
       this.selectedDataset = datasetId
     },
