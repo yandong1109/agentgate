@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+pydantic
+# 真实 LangChain 接入时补充：
+# langchain-core
+# langchain-openai
+# openinference-instrumentation-langchain
